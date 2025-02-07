@@ -1,0 +1,426 @@
+#include <Wire.h>
+#include <RTClib.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESP32Servo.h>
+
+RTC_DS3231 rtc;
+WebServer server(80);
+Servo gateServo1;  // Gate 1
+Servo gateServo2;  // Gate 2
+
+// Pins
+const int servoPin1 = 26; // GPIO26 pin for Gate 1
+const int servoPin2 = 27; // GPIO27 pin for Gate 2
+
+int openHourGate1, openMinuteGate1;
+int closeHourGate1, closeMinuteGate1;
+
+int openHourGate2, openMinuteGate2;
+int closeHourGate2, closeMinuteGate2;
+
+int openAngleGate1 = 0;
+int closeAngleGate1 = 100;
+int openAngleGate2 = 0;
+int closeAngleGate2 = 100;
+unsigned long servoMoveTime = 0;
+bool isServoMoving = false;
+bool gate1IsOpen = false;
+bool gate2IsOpen = false;
+
+
+unsigned long lastMillis = 0;
+const char* ssid = "Feeder1";
+const char* password = "123456789";
+
+
+struct Schedule {
+  int openHour;
+  int openMinute;
+  int closeHour;
+  int closeMinute;
+  bool active; // Indicates if the schedule is active or not
+};
+
+#define MAX_SCHEDULES 3 // Maximum of 3 schedules per gate
+Schedule schedulesGate1[MAX_SCHEDULES];
+Schedule schedulesGate2[MAX_SCHEDULES];
+
+void initializeSchedules() {
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    schedulesGate1[i] = { -1, -1, -1, -1, false }; // Disabled by default
+    schedulesGate2[i] = { -1, -1, -1, -1, false }; // Disabled by default
+  }
+}
+
+// Function declarations
+void handleRoot();
+void handleTime();
+void handleSetTime();
+void handleConfigureGate();
+void handleSaveConfiguration();
+void handleTestGate();
+void openGate1();
+void closeGate1();
+void openGate2();
+void closeGate2();
+void controlGateBySchedule();
+
+void setup() {
+  Serial.begin(115200);
+
+  if (!rtc.begin()) {
+    Serial.println("Error Initializing RTC");
+    while (1); // Halt the program if RTC fails to initialize
+  }
+    // Define IP address, subnet, gateway
+  IPAddress local_ip(192, 168, 4, 1);     // Set the static IP address
+  IPAddress gateway(192, 168, 4, 1);       // Set the gateway IP
+  IPAddress subnet(255, 255, 255, 0);      // Set the subnet mask
+
+  // Set the static IP for the ESP32
+  WiFi.config(local_ip, gateway, subnet);
+  WiFi.softAP(ssid, password);
+  Serial.println("WiFi Network Created");
+
+  gateServo1.attach(servoPin1);
+  gateServo2.attach(servoPin2);
+
+  initializeSchedules();
+
+  server.on("/", handleRoot);
+  server.on("/time", handleTime);
+  server.on("/settime", handleSetTime);
+  server.on("/configureGate", HTTP_GET, handleConfigureGate);
+  server.on("/saveConfiguration", HTTP_GET, handleSaveConfiguration);
+  server.on("/testGate", HTTP_GET, handleTestGate);
+  server.on("/openGate1", HTTP_GET, openGate1);
+  server.on("/closeGate1", HTTP_GET, closeGate1);
+  server.on("/openGate2", HTTP_GET, openGate2);
+  server.on("/closeGate2", HTTP_GET, closeGate2);
+
+  server.begin();
+  Serial.println("WIFI network started");
+}
+
+void loop() {
+  server.handleClient();
+  controlGateBySchedule();
+
+  if (isServoMoving && millis() - servoMoveTime >= 1000) {
+    isServoMoving = false;
+    // Servo movement complete
+  }
+}
+
+void controlGateBySchedule() {
+  DateTime now = rtc.now();
+  int currentHour = now.hour();
+  int currentMinute = now.minute();
+
+  // Check schedules for Gate 1
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    if (schedulesGate1[i].active && currentHour == schedulesGate1[i].openHour && currentMinute == schedulesGate1[i].openMinute) {
+      if (!isServoMoving) {
+        openGate1();
+      }
+    } else if (schedulesGate1[i].active && currentHour == schedulesGate1[i].closeHour && currentMinute == schedulesGate1[i].closeMinute) {
+      if (!isServoMoving) {
+        closeGate1();
+      }
+    }
+  }
+
+  // Check schedules for Gate 2
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    if (schedulesGate2[i].active && currentHour == schedulesGate2[i].openHour && currentMinute == schedulesGate2[i].openMinute) {
+      if (!isServoMoving) {
+        openGate2();
+      }
+    } else if (schedulesGate2[i].active && currentHour == schedulesGate2[i].closeHour && currentMinute == schedulesGate2[i].closeMinute) {
+      if (!isServoMoving) {
+        closeGate2();
+      }
+    }
+  }
+}
+
+
+void handleRoot() {
+  DateTime now = rtc.now();
+  String date = String(now.day()) + "/" + String(now.month()) + "/" + String(now.year());
+  String time = String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second());
+
+  // Create the list of schedules for Gate 1
+  String schedulesGate1Html = "<div style='flex: 1; margin: 10px; padding: 10px; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);'>";
+  schedulesGate1Html += "<h2>Gate 1</h2>";
+  schedulesGate1Html += "<ul style='list-style-type: none; padding: 0;'>";
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    if (schedulesGate1[i].active) {
+      schedulesGate1Html += "<li style='margin: 10px 0; padding: 10px; background-color: #fff; border-radius: 5px; box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);'>";
+      schedulesGate1Html += "<strong>Itinerary " + String(i + 1) + ":</strong><br>";
+      schedulesGate1Html += "Opening: " + String(schedulesGate1[i].openHour) + ":" + (schedulesGate1[i].openMinute < 10 ? "0" : "") + String(schedulesGate1[i].openMinute) + "<br>";
+      schedulesGate1Html += "Closing: " + String(schedulesGate1[i].closeHour) + ":" + (schedulesGate1[i].closeMinute < 10 ? "0" : "") + String(schedulesGate1[i].closeMinute);
+      schedulesGate1Html += "</li>";
+    }
+  }
+  schedulesGate1Html += "</ul></div>";
+
+  // Create the list of schedules for Gate 2
+  String schedulesGate2Html = "<div style='flex: 1; margin: 10px; padding: 10px; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);'>";
+  schedulesGate2Html += "<h2>Gate 2</h2>";
+  schedulesGate2Html += "<ul style='list-style-type: none; padding: 0;'>";
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    if (schedulesGate2[i].active) {
+      schedulesGate2Html += "<li style='margin: 10px 0; padding: 10px; background-color: #fff; border-radius: 5px; box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);'>";
+      schedulesGate2Html += "<strong>Itinerary " + String(i + 1) + ":</strong><br>";
+      schedulesGate2Html += "Opening: " + String(schedulesGate2[i].openHour) + ":" + (schedulesGate2[i].openMinute < 10 ? "0" : "") + String(schedulesGate2[i].openMinute) + "<br>";
+      schedulesGate2Html += "Closing: " + String(schedulesGate2[i].closeHour) + ":" + (schedulesGate2[i].closeMinute < 10 ? "0" : "") + String(schedulesGate2[i].closeMinute);
+      schedulesGate2Html += "</li>";
+    }
+  }
+  schedulesGate2Html += "</ul></div>";
+
+  // Build the main page
+  String html = "<html><head><style>";
+  html += "body { font-family: Arial, sans-serif; text-align: center; background-color: #e0e0e0; margin: 0; padding: 20px; }";
+  html += "h1 { color: #333; }";
+  html += "button { margin: 10px; padding: 10px 20px; border: none; border-radius: 5px; color: #fff; background-color: #007bff; cursor: pointer; }";
+  html += "button:hover { background-color: #0056b3; }";
+  html += "div.container { display: flex; justify-content: space-between; margin: 20px 0; }";
+  html += "div.schedule { flex: 1; margin: 10px; padding: 10px; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }";
+  html += "ul { list-style-type: none; padding: 0; }";
+  html += "li { margin: 10px 0; padding: 10px; background-color: #fff; border-radius: 5px; box-shadow: 0 0 5px rgba(0, 0, 0, 0.1); }";
+  html += "</style></head><body>";
+  html += "<h1>Feeder 1</h1>";
+  html += "<div><span>Date: " + date + "</span></div>";
+  html += "<div><span>Time: " + time + "</span></div>";
+  html += "<p>Opening Schedule:</p>";
+  html += "<div class='container'>";
+  html += schedulesGate1Html;
+  html += schedulesGate2Html;
+  html += "</div>";
+  html += "<button onclick=\"window.location.href='/settime'\">Set Date and Time</button>";
+  html += "<button onclick=\"window.location.href='/configureGate'\">Configure Gate</button>";
+  html += "<button onclick=\"window.location.href='/testGate'\">Gate Test</button>";
+  html += "</body></html>";
+
+  server.send(200, "text/html", html);
+}
+
+
+void handleTime() {
+  DateTime now = rtc.now();
+  String html = "<html><body><h1>Current Time</h1>";
+  html += "<p>Current time is: " + String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second()) + "</p>";
+  html += "<button onclick=\"window.location.href='/settime'\">Set Time</button>";
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleSetTime() {
+  if (server.hasArg("date") && server.hasArg("time")) {
+    String dateStr = server.arg("date");
+    String timeStr = server.arg("time");
+
+    int day = dateStr.substring(0, 2).toInt();
+    int month = dateStr.substring(3, 5).toInt();
+    int year = dateStr.substring(6).toInt();
+    int hour = timeStr.substring(0, 2).toInt();
+    int minute = timeStr.substring(3, 5).toInt();
+    int second = timeStr.substring(6).toInt();
+
+    rtc.adjust(DateTime(year, month, day, hour, minute, second));
+
+    server.send(200, "text/plain", "Date and time updated: " + dateStr + " " + timeStr);
+  } else {
+    String dateTime = String(rtc.now().day()) + "/" + String(rtc.now().month()) + "/" + String(rtc.now().year()) + " " + String(rtc.now().hour()) + ":" + String(rtc.now().minute()) + ":" + String(rtc.now().second());
+
+    String html = "<html><head><style>";
+    html += "body { font-family: Arial, sans-serif; text-align: center; background-color: #e0e0e0; }";
+    html += "h1 { color: #333; }";
+    html += "button { margin: 10px; padding: 10px 20px; border: none; border-radius: 5px; color: #fff; background-color: #007bff; cursor: pointer; }";
+    html += "button:hover { background-color: #0056b3; }";
+    html += "</style></head><body>";
+    html += "<h1>Set Date and Time</h1>";
+    html += "<div><span>Current date and time: " + dateTime + "</span></div>";
+    html += "<form action=\"/settime\" method=\"get\">";
+    html += "<label for=\"date\">Date (dd/mm/yyyy):</label>";
+    html += "<input type=\"text\" id=\"date\" name=\"date\"><br><br>";
+    html += "<label for=\"time\">Time (hh:mm:ss):</label>";
+    html += "<input type=\"text\" id=\"time\" name=\"time\"><br><br>";
+    html += "<input type=\"submit\" value=\"Save\">";
+    html += "</form>";
+    html += "</body></html>";
+    server.send(200, "text/html", html);
+  }
+}
+
+void handleConfigureGate() {
+  String html = "<html><head><style>";
+  html += "body { font-family: Arial, sans-serif; text-align: center; background-color: #e0e0e0; }";
+  html += "h1 { color: #333; }";
+  html += "button { margin: 10px; padding: 10px 20px; border: none; border-radius: 5px; color: #fff; background-color: #007bff; cursor: pointer; }";
+  html += "button:hover { background-color: #0056b3; }";
+  html += "div { margin: 20px 0; }";
+  html += "span { display: block; margin: 10px 0; }";
+  html += "div.container { display: flex; justify-content: space-between; margin: 20px 0; }";  // New flex container for columns
+  html += "div.gate { flex: 1; margin: 10px; padding: 10px; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }"; // Gate styling
+  html += "</style></head><body>";
+  html += "<h1>Configure Gate</h1>";
+  html += "<form action=\"/saveConfiguration\" method=\"get\">";
+
+  // Start flex container
+  html += "<div class='container'>";
+
+  // Configuration for Gate 1 (Left column)
+  html += "<div class='gate'>";
+  html += "<h2>Gate 1</h2>";
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    html += "<div>";
+    html += "<input type='checkbox' name='activeG1_" + String(i) + "' " + (schedulesGate1[i].active ? "checked" : "") + "> Enable Schedule " + String(i + 1) + "<br>";
+    html += "Opening time: <input type='time' name='openHourG1_" + String(i) + "' value='" + (schedulesGate1[i].openHour != -1 ? String(schedulesGate1[i].openHour) + ":" + String(schedulesGate1[i].openMinute) : "") + "'><br>";
+    html += "Closing time: <input type='time' name='closeHourG1_" + String(i) + "' value='" + (schedulesGate1[i].closeHour != -1 ? String(schedulesGate1[i].closeHour) + ":" + String(schedulesGate1[i].closeMinute) : "") + "'><br>";
+    html += "</div>";
+  }
+  html += "</div>"; // End Gate 1 column
+
+  // Configuration for Gate 2 (Right column)
+  html += "<div class='gate'>";
+  html += "<h2>Gate 2</h2>";
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    html += "<div>";
+    html += "<input type='checkbox' name='activeG2_" + String(i) + "' " + (schedulesGate2[i].active ? "checked" : "") + "> Enable Schedule " + String(i + 1) + "<br>";
+    html += "Opening time: <input type='time' name='openHourG2_" + String(i) + "' value='" + (schedulesGate2[i].openHour != -1 ? String(schedulesGate2[i].openHour) + ":" + String(schedulesGate2[i].openMinute) : "") + "'><br>";
+    html += "Closing time: <input type='time' name='closeHourG2_" + String(i) + "' value='" + (schedulesGate2[i].closeHour != -1 ? String(schedulesGate2[i].closeHour) + ":" + String(schedulesGate2[i].closeMinute) : "") + "'><br>";
+    html += "</div>";
+  }
+  html += "</div>"; // End Gate 2 column
+
+  // End flex container
+  html += "</div>";
+
+  html += "<input type=\"submit\" value=\"Save\">";
+  html += "</form>";
+  html += "</body></html>";
+
+  server.send(200, "text/html", html);
+}
+
+void handleSaveConfiguration() {
+  for (int i = 0; i < MAX_SCHEDULES; i++) {
+    // Save configuration for Gate 1
+    schedulesGate1[i].active = server.arg("activeG1_" + String(i)) == "on";
+    String openG1 = server.arg("openHourG1_" + String(i));
+    String closeG1 = server.arg("closeHourG1_" + String(i));
+    if (openG1.length() > 0) {
+      schedulesGate1[i].openHour = openG1.substring(0, 2).toInt();
+      schedulesGate1[i].openMinute = openG1.substring(3, 5).toInt();
+    } else {
+      schedulesGate1[i].openHour = -1;
+      schedulesGate1[i].openMinute = -1;
+    }
+    if (closeG1.length() > 0) {
+      schedulesGate1[i].closeHour = closeG1.substring(0, 2).toInt();
+      schedulesGate1[i].closeMinute = closeG1.substring(3, 5).toInt();
+    } else {
+      schedulesGate1[i].closeHour = -1;
+      schedulesGate1[i].closeMinute = -1;
+    }
+
+    // Save configuration for Gate 2
+    schedulesGate2[i].active = server.arg("activeG2_" + String(i)) == "on";
+    String openG2 = server.arg("openHourG2_" + String(i));
+    String closeG2 = server.arg("closeHourG2_" + String(i));
+    if (openG2.length() > 0) {
+      schedulesGate2[i].openHour = openG2.substring(0, 2).toInt();
+      schedulesGate2[i].openMinute = openG2.substring(3, 5).toInt();
+    } else {
+      schedulesGate2[i].openHour = -1;
+      schedulesGate2[i].openMinute = -1;
+    }
+    if (closeG2.length() > 0) {
+      schedulesGate2[i].closeHour = closeG2.substring(0, 2).toInt();
+      schedulesGate2[i].closeMinute = closeG2.substring(3, 5).toInt();
+    } else {
+      schedulesGate2[i].closeHour = -1;
+      schedulesGate2[i].closeMinute = -1;
+    }
+  }
+  server.send(200, "text/plain", "Configuration Saved");
+}
+
+void handleTestGate() {
+  String html = "<html><head><style>";
+  html += "body { font-family: Arial, sans-serif; text-align: center; background-color: #e0e0e0; }";
+  html += "h1 { color: #333; }";
+  html += "button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }";
+  html += "button:hover { background-color: #0056b3; }";
+  html += "</style></head><body>";
+  html += "<h1>Gate Test</h1>";
+  html += "<button onclick=\"window.location.href='/openGate1'\">Open Gate 1</button><br><br>";
+  html += "<button onclick=\"window.location.href='/closeGate1'\">Close Gate 1</button><br><br>";
+  html += "<button onclick=\"window.location.href='/openGate2'\">Open Gate 2</button><br><br>";
+  html += "<button onclick=\"window.location.href='/closeGate2'\">Close Gate 2</button><br><br>";
+  html += "<button onclick=\"window.location.href='/'\">Back to Main Menu</button><br><br>";
+
+  html += "<script>";
+  html += "setTimeout(function(){ window.location.reload(); }, 1000);";
+  html += "</script>";
+
+  html += "</body></html>";
+
+  server.send(200, "text/html", html);
+}
+
+
+void openGate1() {
+  if (isServoMoving || gate1IsOpen) {
+    Serial.println("Gate 1 is already open or moving!");
+    return;  // 
+  }
+  isServoMoving = true;
+  gateServo1.write(openAngleGate1);
+  servoMoveTime = millis();
+  gate1IsOpen = true;
+  Serial.println("Opening Gate 1");
+}
+
+void closeGate1() {
+  if (isServoMoving || !gate1IsOpen) {
+    Serial.println("Gate 1 is already closed or moving!");
+    return;  //
+  }
+
+  isServoMoving = true;
+  gateServo1.write(closeAngleGate1);
+  servoMoveTime = millis();
+  gate1IsOpen = false;
+  Serial.println("Closing Gate 1");
+}
+
+void openGate2() {
+  if (isServoMoving || gate2IsOpen) {
+    Serial.println("Gate 2 is already open or moving!");
+    return;  // 
+  }
+
+  isServoMoving = true;
+  gateServo2.write(openAngleGate2);
+  servoMoveTime = millis();
+  gate2IsOpen = true;
+  Serial.println("Opening Gate 2");
+}
+
+void closeGate2() {
+  if (isServoMoving || !gate2IsOpen) {
+    Serial.println("Gate 2 is already closed or moving!");
+    return;  // 
+  }
+
+  isServoMoving = true;
+  gateServo2.write(closeAngleGate2);
+  servoMoveTime = millis();
+  gate2IsOpen = false;
+  Serial.println("Closing Gate 2");
+}
