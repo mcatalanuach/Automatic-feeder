@@ -278,7 +278,7 @@ void handleConfigureGate() {
   html += "<h2>Gate 1</h2>";
   for (int i = 0; i < MAX_SCHEDULES; i++) {
     html += "<div>";
-    html += "<input type='checkbox' name='activeG1_" + String(i) + "' " + (schedulesGate1[i].active ? "checked" : "") + "> Enable Schedule " + String(i + 1) + "<br>";
+    html += "<input type='checkbox' name='activeG1_" + String(i) + "' " + (schedulesGate1[i].active ? "checked" : "") + "> Enable Itinerary " + String(i + 1) + "<br>";
     html += "Opening time: <input type='time' name='openHourG1_" + String(i) + "' value='" + (schedulesGate1[i].openHour != -1 ? String(schedulesGate1[i].openHour) + ":" + String(schedulesGate1[i].openMinute) : "") + "'><br>";
     html += "Closing time: <input type='time' name='closeHourG1_" + String(i) + "' value='" + (schedulesGate1[i].closeHour != -1 ? String(schedulesGate1[i].closeHour) + ":" + String(schedulesGate1[i].closeMinute) : "") + "'><br>";
     html += "</div>";
@@ -290,7 +290,7 @@ void handleConfigureGate() {
   html += "<h2>Gate 2</h2>";
   for (int i = 0; i < MAX_SCHEDULES; i++) {
     html += "<div>";
-    html += "<input type='checkbox' name='activeG2_" + String(i) + "' " + (schedulesGate2[i].active ? "checked" : "") + "> Enable Schedule " + String(i + 1) + "<br>";
+    html += "<input type='checkbox' name='activeG2_" + String(i) + "' " + (schedulesGate2[i].active ? "checked" : "") + "> Enable Itinerary " + String(i + 1) + "<br>";
     html += "Opening time: <input type='time' name='openHourG2_" + String(i) + "' value='" + (schedulesGate2[i].openHour != -1 ? String(schedulesGate2[i].openHour) + ":" + String(schedulesGate2[i].openMinute) : "") + "'><br>";
     html += "Closing time: <input type='time' name='closeHourG2_" + String(i) + "' value='" + (schedulesGate2[i].closeHour != -1 ? String(schedulesGate2[i].closeHour) + ":" + String(schedulesGate2[i].closeMinute) : "") + "'><br>";
     html += "</div>";
